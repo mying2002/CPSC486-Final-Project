@@ -1,0 +1,129 @@
+---
+title: "486 project"
+output: pdf_document
+date: "2024-05-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE) # care
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+
+# --- for plotting and stuff --- #
+# devtools::install_github("bmacGTPM/pubtheme")
+library(pubtheme)
+library(hrbrthemes)
+library(viridis)
+
+```
+
+## Data
+
+```{r data}
+# read in
+# ! colab failed so data was in 2 batches
+unperturbed_outputs = read.csv('outputs/sigma_05_results.csv')
+net_out_1 = read.csv('outputs/net_attack_outputs_1.csv')
+net_out_2 = read.csv('outputs/net_attack_outputs_2.csv')
+smooth_out_1 = read.csv('outputs/smooth_attack_outputs_1.csv')
+smooth_out_2 = read.csv('outputs/smooth_attack_outputs_2.csv')
+
+# processing
+net_out = rbind(net_out_1, net_out_2) %>%
+  mutate(model = "baseline") %>%
+  rename(image_id = id)
+smooth_out = rbind(smooth_out_1, smooth_out_2) %>%
+  mutate(model = "smoothed") %>%
+  rename(image_id = id)
+
+unperturbed_out_full = unperturbed_outputs %>%
+  mutate(image_id = image_id - 1,
+         class_id = image_id %/% 20, # to match labels from our dataset
+         ) 
+unperturbed_out = unperturbed_out_full %>%
+  filter(image_id %% 2 == 0) 
+
+# should match 0 through 9 class id's; order preserved.
+my_classes = c('English springer', 'cassette player', 'chain saw', 'church', 'french horn', 
+               'garbage truck', 'gas pump', 'golf ball', 'parachute', 'tench')
+```
+
+## Plot distribution of radii (overall, and per class)
+
+```{r radii distributions}
+g_radii_all = ggplot(data=unperturbed_out_full, aes(x=smooth_radius)) +
+  geom_density() + 
+  labs(title = "Distribution of estimated certified radii",
+       subtitle = "generated with n=10000 samples") +
+  xlab("Radius") +
+  theme_pub("hist")
+
+g_radii_all
+# ggsave(plot = g_radii_all, width = 9, height = 6, dpi = 300, filename = "plots/g_radii_all.png")
+
+
+g_radii_class = ggplot(data=unperturbed_out_full, aes(x=smooth_radius, y=factor(class_id))) +
+  geom_violin() +
+  labs(title = "Distributions of estimated certified radii, by class",
+       subtitle = "generated with n=10000 samples") +
+  xlab("Radius") +
+  ylab("Class (ID)") +
+  theme_pub("hist")
+
+g_radii_class
+# ggsave(plot = g_radii_class, width = 9, height = 6, dpi = 300, filename = "plots/g_radii_class.png")
+
+```
+
+## Analysis of attacks
+
+```{r prep attack data}
+net_out_with_meta = net_out %>%
+  left_join(unperturbed_out, by="image_id") %>%
+  select(-smooth_labels) %>%
+  rename(og_prediction = ResNet_labels)
+
+smooth_out_with_meta = smooth_out %>%
+  left_join(unperturbed_out, by="image_id") %>%
+  select(-ResNet_labels) %>%
+  rename(og_prediction = smooth_labels)
+
+full_out_with_meta = rbind(net_out_with_meta, smooth_out_with_meta) %>%
+  rename(fgsm_rescaled = fgsm_rescaled_pred, 
+         grad_rescaled = grad_rescaled_pred,
+         pgd_sign = pgd_sign_pred,
+         pgd_grad = pgd_grad_pred
+         ) %>%
+  pivot_longer(cols = c(fgsm_rescaled, grad_rescaled, pgd_sign, pgd_grad), names_to = "attack", values_to = "prediction") %>%
+  mutate(prediction_outcome = case_when(
+    prediction == -1 | og_prediction == -1 ~ "abstain", 
+    prediction == og_prediction ~ "correct",
+    prediction != og_prediction ~ "incorrect"
+  ))
+
+
+
+```
+
+```{r tile results}
+# goal: heatmap of green = correct, yellow/orange = abstain, red = incorrect. bin by baseline or not. 
+
+# color_mapping = c("correct" = "green", "abstain" = "yellow", "incorrect" = "red")
+color_mapping = c("correct" = "#2ECC71", "abstain" = "#F1C40F", "incorrect" = "#CB4335")
+
+g_outcomes = ggplot(full_out_with_meta, aes(x=val, y=image_id, fill=prediction_outcome)) + 
+  geom_tile(color = "white", size = 0.1) +
+  facet_grid(vars(model), vars(attack)) +
+  scale_fill_manual(values = color_mapping, name = "Outcome") +
+  labs(title = "Prediction outcome of adversarial attacks") + 
+  xlab("Perturbation factor") + 
+  ylab("Image ID") + 
+  theme_pub(type = "grid", facet=TRUE)
+g_outcomes
+
+# ggsave(plot = g_outcomes, width = 9, height = 9, dpi = 300, filename = "plots/g_outcomes.png")
+
+```
+
